@@ -32,15 +32,39 @@ let
     postPatch = (old.postPatch or "") + ''
       substituteInPlace src/nautilus-python.c \
         --replace-fail \
-          '    debug("Py_Initialize");' \
-          '    g_setenv("PYTHONHOME", "${python3}", FALSE);
-          debug("Py_Initialize");' \
+          '    debug("Py_Initialize");
+          Py_Initialize();
+          if (PyErr_Occurred()) {
+              PyErr_Print();
+              return FALSE;
+          }' \
+          '    PyConfig config;
+          PyStatus status;
+
+          debug("Py_InitializeFromConfig");
+          PyConfig_InitPythonConfig(&config);
+          status = PyConfig_SetString(&config, &config.home, L"${python3}");
+          if (PyStatus_Exception(status)) {
+              g_warning("Could not configure Python home: %s", status.err_msg != NULL ? status.err_msg : "unknown error");
+              PyConfig_Clear(&config);
+              return FALSE;
+          }
+          status = Py_InitializeFromConfig(&config);
+          if (PyStatus_Exception(status)) {
+              g_warning("Could not initialize Python: %s", status.err_msg != NULL ? status.err_msg : "unknown error");
+              PyConfig_Clear(&config);
+              return FALSE;
+          }
+          PyConfig_Clear(&config);
+          if (PyErr_Occurred()) {
+              PyErr_Print();
+              return FALSE;
+          }' \
         --replace-fail \
           '    /* import gobject */' \
           '    debug("Add Pycairo to path");
-          PyRun_SimpleString("import site; site.addsitedir(\"${pycairo}/${python3.sitePackages}\")");
-          if (PyErr_Occurred()) {
-              PyErr_Print();
+          if (PyRun_SimpleString("import site; site.addsitedir(\"${pycairo}/${python3.sitePackages}\")") != 0) {
+              g_warning("Could not add Pycairo to the Python search path");
               return FALSE;
           }
 
