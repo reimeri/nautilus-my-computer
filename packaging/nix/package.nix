@@ -19,6 +19,35 @@
   libadwaita,
 }:
 
+let
+  pycairo = python3.pkgs.pycairo;
+
+  # nautilus-python embeds Python directly instead of invoking the wrapped
+  # interpreter. On NixOS with Python 3.14, Python consequently derives its
+  # module search path from the Nautilus executable and cannot find stdlib
+  # extension modules such as _socket. It also does not expose pycairo, which
+  # widgets.py imports directly. Keep both fixes local to the Nautilus process
+  # instead of requiring a session-wide PYTHONHOME/PYTHONPATH workaround.
+  fixedNautilusPython = nautilus-python.overrideAttrs (old: {
+    postPatch = (old.postPatch or "") + ''
+      substituteInPlace src/nautilus-python.c \
+        --replace-fail \
+          '    debug("Py_Initialize");' \
+          '    g_setenv("PYTHONHOME", "${python3}", FALSE);
+          debug("Py_Initialize");' \
+        --replace-fail \
+          '    /* import gobject */' \
+          '    debug("Add Pycairo to path");
+          PyRun_SimpleString("import site; site.addsitedir(\"${pycairo}/${python3.sitePackages}\")");
+          if (PyErr_Occurred()) {
+              PyErr_Print();
+              return FALSE;
+          }
+
+          /* import gobject */'
+    '';
+  });
+in
 stdenv.mkDerivation {
   pname = "nautilus-my-computer";
   # Keep in sync with pyproject.toml, the Fedora spec and the Arch PKGBUILD.
@@ -33,9 +62,14 @@ stdenv.mkDerivation {
   ];
 
   buildInputs = [
-    nautilus-python # runtime: the plugin host
+    fixedNautilusPython # runtime: patched Python plugin host
     libadwaita # runtime: Adw widgets used by the panel
   ];
+
+  # Installing this package must also place libnautilus-python.so in Nautilus's
+  # extension directory. buildInputs alone only makes it available while this
+  # derivation is built; it does not add the loader to a profile/buildEnv.
+  propagatedUserEnvPkgs = [ fixedNautilusPython ];
 
   makeFlags = [ "PREFIX=${placeholder "out"}" ];
 
